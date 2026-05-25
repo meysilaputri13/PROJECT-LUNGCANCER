@@ -8,7 +8,10 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import numpy as np
 
+from sklearn.metrics import confusion_matrix
 from model import LungCancerModel
 from generate_data import generate_dataset
 
@@ -304,6 +307,38 @@ if predict_button:
     )
     st.plotly_chart(fig_gauge, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True) 
+
+    # ============================================
+    # CONFUSION MATRIX
+    # ============================================
+
+    st.markdown("""
+    <div class="gauge-card">
+        <h3 style="color:#1e293b; margin-top:0; margin-bottom:10px;">
+            📊 Confusion Matrix
+        </h3>
+    """, unsafe_allow_html=True)
+
+    y_true = [0,1,1,0,1,0,1,1]
+    y_pred = [0,1,0,0,1,0,1,1]
+
+    cm = confusion_matrix(y_true, y_pred)
+
+    fig, ax = plt.subplots(figsize=(4,4))
+
+    ax.matshow(cm, cmap="Blues")
+
+    for (i, j), val in np.ndenumerate(cm):
+        ax.text(j, i, val, ha='center', va='center', fontsize=14)
+
+    ax.set_xlabel("Prediksi")
+    ax.set_ylabel("Aktual")
+
+    st.pyplot(fig)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
 
     # ============================================
     # CARD 3: REKOMENDASI MEDIS (Pakai factor-card)
