@@ -319,10 +319,7 @@ if predict_button:
         </h3>
     """, unsafe_allow_html=True)
 
-    y_true = [0,1,1,0,1,0,1,1]
-    y_pred = [0,1,0,0,1,0,1,1]
-
-    cm = confusion_matrix(y_true, y_pred)
+    cm = model.cm
 
     fig, ax = plt.subplots(figsize=(4,4))
 
@@ -339,6 +336,8 @@ if predict_button:
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
+
+    
 
     # ============================================
     # CARD 3: REKOMENDASI MEDIS (Pakai factor-card)

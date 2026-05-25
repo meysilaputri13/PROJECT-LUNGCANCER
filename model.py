@@ -14,6 +14,8 @@ from sklearn.metrics import (
     classification_report, 
     confusion_matrix
 )
+from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.model_selection import train_test_split
 import os
 
 
@@ -80,7 +82,25 @@ class LungCancerModel:
             class_weight='balanced'
         )
 
+        # Split data train dan test
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=0.2,
+            random_state=42
+        )
+
+        # Training model
         self.model.fit(X_train, y_train)
+
+        # Prediksi data testing
+        y_pred = self.model.predict(X_test)
+
+        # Simpan confusion matrix
+        self.cm = confusion_matrix(y_test, y_pred)
+
+        # Simpan accuracy
+        self.accuracy = accuracy_score(y_test, y_pred)
 
         # Evaluasi
         self.X_test = X_test
