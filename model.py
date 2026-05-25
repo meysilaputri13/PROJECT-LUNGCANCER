@@ -115,6 +115,7 @@ class LungCancerModel:
 
         print(f"\n✅ Model berhasil di-training!")
         print(f"   Akurasi: {self.accuracy:.2%}")
+        print(f"   Confusion Matrix:\n{self.cm}")
 
         return self.model
 

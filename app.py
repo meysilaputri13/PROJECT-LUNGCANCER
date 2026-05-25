@@ -306,38 +306,7 @@ if predict_button:
         margin=dict(l=20, r=20, t=30, b=20)
     )
     st.plotly_chart(fig_gauge, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True) 
-
-    # ============================================
-    # CONFUSION MATRIX
-    # ============================================
-
-    st.markdown("""
-    <div class="gauge-card">
-        <h3 style="color:#1e293b; margin-top:0; margin-bottom:10px;">
-            📊 Confusion Matrix
-        </h3>
-    """, unsafe_allow_html=True)
-
-    cm = model.cm
-
-    fig, ax = plt.subplots(figsize=(4,4))
-
-    ax.matshow(cm, cmap="Blues")
-
-    for (i, j), val in np.ndenumerate(cm):
-        ax.text(j, i, val, ha='center', va='center', fontsize=14)
-
-    ax.set_xlabel("Prediksi")
-    ax.set_ylabel("Aktual")
-
-    st.pyplot(fig)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    
+    st.markdown("</div>", unsafe_allow_html=True)    
 
     # ============================================
     # CARD 3: REKOMENDASI MEDIS (Pakai factor-card)
