@@ -20,7 +20,7 @@ import os
 
 
 class LungCancerModel:
-    """Kelas model Decision Tree untuk prediksi kanker paru."""
+    """Decision Tree model class for lung cancer prediction."""
 
     def __init__(self):
         self.model = None
@@ -34,13 +34,13 @@ class LungCancerModel:
         self.cm = None
 
     # ========================================
-    # PREPROCESSING DATA
+    # DATA PREPROCESSING
     # ========================================
     def preprocess(self, filepath):
-        """Load dan preprocessing dataset dari CSV."""
+        """Load and preprocess dataset from CSV."""
         df = pd.read_csv(filepath)
 
-        # 🔧 WAJIB: Bersihkan nama kolom (hapus spasi, ganti jadi underscore)
+        # Clean column names (strip spaces, replace spaces with underscores)
         df.columns = df.columns.str.strip()
         df.columns = df.columns.str.replace(' ', '_')
 
@@ -50,20 +50,20 @@ class LungCancerModel:
         # Encode LUNG_CANCER: YES=1, NO=0
         df['LUNG_CANCER'] = df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
 
-        # Simpan data yang sudah diproses
+        # Store processed data
         self.df_processed = df
         self.feature_names = df.drop('LUNG_CANCER', axis=1).columns.tolist()
 
         return df
 
     # ========================================
-    # TRAINING MODEL
+    # MODEL TRAINING
     # ========================================
     def train(self, filepath):
-        """Training model Decision Tree."""
+        """Train the Decision Tree model."""
         df = self.preprocess(filepath)
 
-        # Pisahkan fitur dan target
+        # Separate features and target
         X = df.drop('LUNG_CANCER', axis=1)
         y = df['LUNG_CANCER']
 
@@ -72,7 +72,7 @@ class LungCancerModel:
             X, y, test_size=0.2, random_state=42
         )
 
-        # Buat dan training model Decision Tree (SUDAH DITUNING UNTUK KAGGLE)
+        # Create and train Decision Tree model (TUNED FOR KAGGLE DATASET)
         self.model = DecisionTreeClassifier(
             max_depth=4,
             min_samples_split=15,
@@ -82,80 +82,66 @@ class LungCancerModel:
             class_weight='balanced'
         )
 
-        # Split data train dan test
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=0.2,
-            random_state=42
-        )
-
-        # Training model
+        # Train model
         self.model.fit(X_train, y_train)
 
-        # Prediksi data testing
+        # Predict testing data
         y_pred = self.model.predict(X_test)
 
-        # Simpan confusion matrix
-        self.cm = confusion_matrix(y_test, y_pred)
-
-        # Simpan accuracy
-        self.accuracy = accuracy_score(y_test, y_pred)
-
-        # Evaluasi
+        # Evaluation metrics
         self.X_test = X_test
         self.y_test = y_test
-        self.y_pred = self.model.predict(X_test)
-        self.accuracy = accuracy_score(y_test, self.y_pred)
+        self.y_pred = y_pred
+        self.accuracy = accuracy_score(y_test, y_pred)
         self.report = classification_report(
             y_test, self.y_pred, 
-            target_names=['Tidak Kanker', 'Kanker Paru']
+            target_names=['No Cancer', 'Lung Cancer']
         )
-        self.cm = confusion_matrix(y_test, self.y_pred)
+        self.cm = confusion_matrix(y_test, y_pred)
 
-        print(f"\n✅ Model berhasil di-training!")
-        print(f"   Akurasi: {self.accuracy:.2%}")
+        print(f"\n✅ Model successfully trained!")
+        print(f"   Accuracy: {self.accuracy:.2%}")
         print(f"   Confusion Matrix:\n{self.cm}")
 
         return self.model
 
     # ========================================
-    # PREDIKSI
+    # PREDICTION
     # ========================================
     def predict(self, input_dict):
         """
-        Prediksi berdasarkan input dictionary.
+        Predict based on input dictionary.
         """
         if self.model is None:
-            raise Exception("Model belum di-training! Jalankan train() dulu.")
+            raise Exception("Model is not trained yet! Run train() first.")
 
-        # Buat DataFrame dari input
+        # Create DataFrame from input
         input_df = pd.DataFrame([input_dict])
 
-        # 🔧 WAJIB: Bersihkan nama kolom dari input user juga!
+        # Clean column names from user input as well
         input_df.columns = input_df.columns.str.strip()
         input_df.columns = input_df.columns.str.replace(' ', '_')
 
-        # Pastikan urutan kolom sesuai dengan saat training
+        # Ensure column order matches training data
         input_df = input_df[self.feature_names]
 
-        # Prediksi
+        # Predict
         prediction = self.model.predict(input_df)[0]
         probability = self.model.predict_proba(input_df)[0]
 
         return prediction, probability
 
     # ========================================
-    # VISUALISASI DECISION TREE
+    # DECISION TREE VISUALIZATION
     # ========================================
     def get_tree_plot(self):
-        """Mengembalikan figure matplotlib visualisasi decision tree."""
+        """Return matplotlib figure of the decision tree visualization."""
         fig, ax = plt.subplots(figsize=(22, 12))
         
         plot_tree(
             self.model,
             feature_names=self.feature_names,
-            class_names=['Tidak Kanker', 'Kanker Paru'],
+            class_names=['No Cancer', 'Lung Cancer'],
             filled=True,
             rounded=True,
             fontsize=9,
@@ -164,7 +150,7 @@ class LungCancerModel:
         )
         
         plt.title(
-            "Visualisasi Decision Tree - Prediksi Kanker Paru",
+            "Decision Tree Visualization - Lung Cancer Prediction",
             fontsize=16, 
             fontweight='bold',
             color='#1e293b',
@@ -178,25 +164,25 @@ class LungCancerModel:
     # FEATURE IMPORTANCE
     # ========================================
     def get_feature_importance(self):
-        """Mengembalikan DataFrame feature importance."""
+        """Return DataFrame of feature importances."""
         importance = self.model.feature_importances_
         
         label_map = {
-            'GENDER': 'Jenis Kelamin',
-            'AGE': 'Usia',
-            'SMOKING': 'Merokok',
-            'YELLOW_FINGERS': 'Jari Kuning',
-            'ANXIETY': 'Kecemasan',
-            'PEER_PRESSURE': 'Tekanan Teman Sebaya',
-            'CHRONIC_DISEASE': 'Penyakit Kronis',
-            'FATIGUE': 'Kelelahan',
-            'ALLERGY': 'Alergi',
-            'WHEEZING': 'Mengi/Napas Berbunyi',
-            'ALCOHOL_CONSUMING': 'Konsumsi Alkohol',
-            'COUGHING': 'Batuk',
-            'SHORTNESS_OF_BREATH': 'Sesak Napas',
-            'SWALLOWING_DIFFICULTY': 'Sulit Menelan',
-            'CHEST_PAIN': 'Nyeri Dada'
+            'GENDER': 'Gender',
+            'AGE': 'Age',
+            'SMOKING': 'Smoking',
+            'YELLOW_FINGERS': 'Yellow Fingers',
+            'ANXIETY': 'Anxiety',
+            'PEER_PRESSURE': 'Peer Pressure',
+            'CHRONIC_DISEASE': 'Chronic Disease',
+            'FATIGUE': 'Fatigue',
+            'ALLERGY': 'Allergy',
+            'WHEEZING': 'Wheezing',
+            'ALCOHOL_CONSUMING': 'Alcohol Consuming',
+            'COUGHING': 'Coughing',
+            'SHORTNESS_OF_BREATH': 'Shortness of Breath',
+            'SWALLOWING_DIFFICULTY': 'Swallowing Difficulty',
+            'CHEST_PAIN': 'Chest Pain'
         }
 
         fi_df = pd.DataFrame({
@@ -205,7 +191,7 @@ class LungCancerModel:
             'Importance': importance
         }).sort_values('Importance', ascending=True)
 
-        # Filter hanya yang importance > 0
+        # Filter only importance > 0
         fi_df = fi_df[fi_df['Importance'] > 0]
 
         return fi_df
@@ -214,7 +200,7 @@ class LungCancerModel:
     # CONFUSION MATRIX
     # ========================================
     def get_confusion_matrix_plot(self):
-        """Mengembalikan figure matplotlib confusion matrix."""
+        """Return matplotlib figure of the confusion matrix."""
         fig, ax = plt.subplots(figsize=(8, 6))
         
         sns.heatmap(
@@ -222,25 +208,25 @@ class LungCancerModel:
             annot=True,
             fmt='d',
             cmap='Blues',
-            xticklabels=['Tidak Kanker', 'Kanker Paru'],
-            yticklabels=['Tidak Kanker', 'Kanker Paru'],
+            xticklabels=['No Cancer', 'Lung Cancer'],
+            yticklabels=['No Cancer', 'Lung Cancer'],
             ax=ax,
             linewidths=1,
             linecolor='white'
         )
         
-        ax.set_xlabel('Prediksi', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Aktual', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Predicted', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Actual', fontsize=12, fontweight='bold')
         ax.set_title('Confusion Matrix', fontsize=14, fontweight='bold', pad=15)
         
         plt.tight_layout()
         return fig
 
     # ========================================
-    # INFO MODEL
+    # MODEL INFO
     # ========================================
     def get_model_info(self):
-        """Mengembalikan informasi detail model."""
+        """Return detailed model information."""
         return {
             'max_depth': self.model.max_depth,
             'min_samples_split': self.model.min_samples_split,
