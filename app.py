@@ -1,32 +1,34 @@
 """
 app.py
-Lung Cancer Risk Prediction Web App - Vertical Layout & Uniform Cards
-Run: streamlit run app.py
+Aplikasi Web Prediksi Kanker Paru - Layout Vertikal & Card Seragam
+Jalankan: streamlit run app.py
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
-import numpy as np
+import seaborn as sns
 
-from sklearn.metrics import confusion_matrix
-from model import LungCancerModel
-from generate_data import generate_dataset
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
 # ============================================
 # PAGE CONFIGURATION
 # ============================================
 st.set_page_config(
-    page_title="Lung Cancer Prediction",
+    page_title="Prediksi Kanker Paru",
     page_icon="🫁",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # ============================================
-# CUSTOM CSS (MODERN BLUE & WHITE)
+# CUSTOM CSS (UI MODERN BIRU & PUTIH)
 # ============================================
 st.markdown("""
 <style>
@@ -34,11 +36,11 @@ st.markdown("""
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-        max-width: 900px;
+        max-width: 900px; /* Agar konten tengah tidak terlalu lebar */
         margin: 0 auto;
     }
 
-    /* ======== PREDICTION RESULT CARD ======== */
+    /* ======== CARD HASIL PREDIKSI ======== */
     .result-card {
         border-radius: 20px;
         padding: 40px;
@@ -59,7 +61,7 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(34,197,94,0.08);
     }
 
-    /* ======== GAUGE CARD ======== */
+    /* ======== CARD GAUGE ======== */
     .gauge-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -70,7 +72,7 @@ st.markdown("""
         text-align: center;
     }
 
-    /* ======== FACTOR CARD (USED FOR ALL INFO) ======== */
+    /* ======== FACTOR CARD (DIGUNAKAN UNTUK SEMUA INFO) ======== */
     .factor-card {
         background: #ffffff;
         border-left: 3px solid #1565c0;
@@ -136,23 +138,220 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ============================================
-# MODEL INITIALIZATION (CACHED)
-# ============================================
-@st.cache_resource
-def init_model():
-    model = LungCancerModel()
-    dataset_path = os.path.join('dataset', 'lung_cancer.csv')
-    if not os.path.exists(dataset_path):
-        generate_dataset()
-    model.train(dataset_path)
-    return model
+# ======================================================================
+# ===== RULE-BASED HELPER FUNCTIONS =====
+# ======================================================================
 
-model = init_model()
+def format_condition_readable(feature_name, operator, threshold, encoders=None, binary_mappings=None, input_value=None):
+    """
+    Ubah kondisi Decision Tree jadi format yang bisa dibaca manusia.
+    Contoh: 'SMOKING <= 1.50' → 'SMOKING = No'
+             'AGE > 60.00'    → 'AGE > 60'
+    """
+    readable = ""
+
+    # ===== PRIORITAS 1: Cek binary_mappings (kolom integer biner 1/2 atau 0/1) =====
+    if binary_mappings and feature_name in binary_mappings:
+        mapping = binary_mappings[feature_name]
+        values = sorted(mapping.keys())
+
+        if len(values) == 2:
+            if operator == '<=':
+                readable = f"{feature_name} = {mapping[values[0]]}"
+            else:
+                readable = f"{feature_name} = {mapping[values[1]]}"
+        else:
+            if operator == '<=':
+                readable = f"{feature_name} ≤ {threshold:.2f}"
+            else:
+                readable = f"{feature_name} > {threshold:.2f}"
+
+    # ===== PRIORITAS 2: Cek encoders (kolom kategorikal string) =====
+    elif encoders and feature_name in encoders:
+        le = encoders[feature_name]
+        classes = list(le.classes_)
+
+        if len(classes) == 2:
+            if operator == '<=':
+                readable = f"{feature_name} = {classes[0]}"
+            else:
+                readable = f"{feature_name} = {classes[1]}"
+        else:
+            if operator == '<=':
+                readable = f"{feature_name} ≤ {threshold:.2f}"
+            else:
+                readable = f"{feature_name} > {threshold:.2f}"
+
+    # ===== PRIORITAS 3: Kolom numerik biasa =====
+    else:
+        if threshold == int(threshold):
+            t_str = str(int(threshold))
+        else:
+            t_str = f"{threshold:.2f}"
+
+        if operator == '<=':
+            readable = f"{feature_name} ≤ {t_str}"
+        else:
+            readable = f"{feature_name} > {t_str}"
+
+    # ===== Tambahkan nilai input pasien jika disediakan =====
+    if input_value is not None:
+        if binary_mappings and feature_name in binary_mappings:
+            mapping = binary_mappings[feature_name]
+            try:
+                val_key = int(round(input_value))
+                if val_key in mapping:
+                    readable += f" (input: {mapping[val_key]})"
+                else:
+                    readable += f" (input: {input_value})"
+            except (ValueError, KeyError):
+                readable += f" (input: {input_value})"
+        elif encoders and feature_name in encoders:
+            le = encoders[feature_name]
+            classes = list(le.classes_)
+            try:
+                idx = int(input_value)
+                if 0 <= idx < len(classes):
+                    readable += f" (input: {classes[idx]})"
+                else:
+                    readable += f" (input: {input_value})"
+            except (IndexError, ValueError):
+                readable += f" (input: {input_value})"
+        else:
+            if float(input_value) == int(float(input_value)):
+                readable += f" (input: {int(float(input_value))})"
+            else:
+                readable += f" (input: {float(input_value):.2f})"
+
+    return readable
+
+
+def extract_tree_rules(tree_model, feature_names, class_names, encoders=None, binary_mappings=None):
+    """
+    Ekstrak semua aturan IF-THEN dari Decision Tree.
+    Setiap path dari root ke leaf = 1 rule.
+    """
+    tree_ = tree_model.tree_
+    rules = []
+
+    def recurse(node, path_conditions):
+        if tree_.feature[node] != -2:  # Bukan leaf
+            feature_idx = tree_.feature[node]
+            feature_name = feature_names[feature_idx]
+            threshold = tree_.threshold[node]
+
+            left_cond = format_condition_readable(feature_name, '<=', threshold, encoders, binary_mappings)
+            recurse(tree_.children_left[node], path_conditions + [left_cond])
+
+            right_cond = format_condition_readable(feature_name, '>', threshold, encoders, binary_mappings)
+            recurse(tree_.children_right[node], path_conditions + [right_cond])
+        else:
+            class_counts = tree_.value[node][0]
+            class_idx = int(np.argmax(class_counts))
+            class_label = class_names[class_idx] if class_idx < len(class_names) else str(class_idx)
+            samples = int(tree_.n_node_samples[node])
+            total = class_counts.sum()
+            confidence = float(class_counts[class_idx] / total) if total > 0 else 0.0
+
+            if path_conditions:
+                if_text = "IF " + " AND ".join(path_conditions)
+            else:
+                if_text = "IF (no conditions)"
+
+            rules.append({
+                'conditions': path_conditions,
+                'if_text': if_text,
+                'conclusion': class_label,
+                'samples': samples,
+                'confidence': confidence,
+                'class_idx': class_idx
+            })
+
+    recurse(0, [])
+    return rules
+
+
+def trace_decision_path(tree_model, feature_names, input_values, class_names, encoders=None, binary_mappings=None):
+    """
+    Telusuri path keputusan yang dilalui data pasien di Decision Tree.
+    Mengembalikan rule spesifik yang cocok dengan input pasien.
+    """
+    tree_ = tree_model.tree_
+    conditions = []
+    node = 0
+
+    while tree_.feature[node] != -2:  # Bukan leaf
+        feature_idx = tree_.feature[node]
+        feature_name = feature_names[feature_idx]
+        threshold = tree_.threshold[node]
+        value = input_values[feature_idx]
+
+        if value <= threshold:
+            cond = format_condition_readable(feature_name, '<=', threshold, encoders, binary_mappings, value)
+            conditions.append(cond)
+            node = tree_.children_left[node]
+        else:
+            cond = format_condition_readable(feature_name, '>', threshold, encoders, binary_mappings, value)
+            conditions.append(cond)
+            node = tree_.children_right[node]
+
+    class_counts = tree_.value[node][0]
+    class_idx = int(np.argmax(class_counts))
+    class_label = class_names[class_idx] if class_idx < len(class_names) else str(class_idx)
+    samples = int(tree_.n_node_samples[node])
+    total = class_counts.sum()
+    confidence = float(class_counts[class_idx] / total) if total > 0 else 0.0
+
+    return {
+        'conditions': conditions,
+        'conclusion': class_label,
+        'samples': samples,
+        'confidence': confidence,
+        'class_idx': class_idx
+    }
+
+# ===== AKHIR RULE-BASED HELPER FUNCTIONS =====
 
 
 # ============================================
-# LAYOUT: SIDEBAR (INPUT FORM)
+# SESSION STATE INITIALIZATION
+# ============================================
+if 'df_raw' not in st.session_state:
+    st.session_state.df_raw = None
+if 'model' not in st.session_state:
+    st.session_state.model = None
+if 'encoders' not in st.session_state:
+    st.session_state.encoders = {}
+if 'feature_cols' not in st.session_state:
+    st.session_state.feature_cols = []
+if 'target_col' not in st.session_state:
+    st.session_state.target_col = None
+if 'target_mapping' not in st.session_state:
+    st.session_state.target_mapping = {}
+if 'preprocess_info' not in st.session_state:
+    st.session_state.preprocess_info = {}
+# ===== TAMBAHAN SESSION STATE =====
+if 'binary_mappings' not in st.session_state:
+    st.session_state.binary_mappings = {}
+if 'rules' not in st.session_state:
+    st.session_state.rules = []
+# ===== AKHIR TAMBAHAN SESSION STATE =====
+
+# ============================================
+# INISIALISASI MODEL (CACHED)
+# ============================================
+st.markdown("""
+<h1 style="text-align:center; font-size:2.4rem; font-weight:800; color:#1e293b; margin-bottom:0.5rem;">
+    🏥 Disease Prediction System
+</h1>
+
+""", unsafe_allow_html=True)
+
+tab_admin, tab_user = st.tabs(["Admin Dashboard", "User Prediction"])
+
+
+# ============================================
+# LAYOUT: SIDEBAR (FORM INPUT)
 # ============================================
 with st.sidebar:
     st.markdown("""
@@ -168,81 +367,80 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.markdown('<p class="section-title">Demographics</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Data Demografis</p>', unsafe_allow_html=True)
     
-    gender = st.selectbox("Gender", ["Male", "Female"], index=0)
-    age = st.slider("Age", 1, 120, 50)
+    gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0)
+    age = st.slider("Usia", 1, 120, 50)
 
     st.markdown("---")
-    st.markdown('<p class="section-title">Lifestyle</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Gaya Hidup</p>', unsafe_allow_html=True)
     
     col_side1, col_side2 = st.columns(2)
     with col_side1:
-        smoking = st.radio("Smoking", ["No", "Yes"], horizontal=True, index=0)
+        smoking = st.radio("Merokok", ["Tidak", "Ya"], horizontal=True, index=0)
     with col_side2:
-        alcohol = st.radio("Alcohol", ["No", "Yes"], horizontal=True, index=0)
+        alcohol = st.radio("Alkohol", ["Tidak", "Ya"], horizontal=True, index=0)
 
     st.markdown("---")
-    st.markdown('<p class="section-title">Clinical Symptoms</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">Gejala Klinis</p>', unsafe_allow_html=True)
     
     g1, g2 = st.columns(2)
     
     with g1:
-        yellow_fingers = st.radio("Yellow Fingers", ["No", "Yes"], horizontal=True, index=0)
-        anxiety = st.radio("Anxiety", ["No", "Yes"], horizontal=True, index=0)
-        peer_pressure = st.radio("Peer Pressure", ["No", "Yes"], horizontal=True, index=0)
-        chronic_disease = st.radio("Chronic Disease", ["No", "Yes"], horizontal=True, index=0)
-        fatigue = st.radio("Fatigue", ["No", "Yes"], horizontal=True, index=0)
-        allergy = st.radio("Allergy", ["No", "Yes"], horizontal=True, index=0)
+        yellow_fingers = st.radio("Jari Kuning", ["Tidak", "Ya"], horizontal=True, index=0)
+        anxiety = st.radio("Kecemasan", ["Tidak", "Ya"], horizontal=True, index=0)
+        peer_pressure = st.radio("Tekanan Lingkungan", ["Tidak", "Ya"], horizontal=True, index=0)
+        chronic_disease = st.radio("Penyakit Kronis", ["Tidak", "Ya"], horizontal=True, index=0)
+        fatigue = st.radio("Kelelahan", ["Tidak", "Ya"], horizontal=True, index=0)
+        allergy = st.radio("Alergi", ["Tidak", "Ya"], horizontal=True, index=0)
 
     with g2:
-        coughing = st.radio("Coughing", ["No", "Yes"], horizontal=True, index=0)
-        shortness = st.radio("Shortness of Breath", ["No", "Yes"], horizontal=True, index=0)
-        swallowing = st.radio("Swallowing Difficulty", ["No", "Yes"], horizontal=True, index=0)
-        chest_pain = st.radio("Chest Pain", ["No", "Yes"], horizontal=True, index=0)
-        wheezing = st.radio("Wheezing", ["No", "Yes"], horizontal=True, index=0)
+        coughing = st.radio("Batuk", ["Tidak", "Ya"], horizontal=True, index=0)
+        shortness = st.radio("Sesak Napas", ["Tidak", "Ya"], horizontal=True, index=0)
+        swallowing = st.radio("Sulit Menelan", ["Tidak", "Ya"], horizontal=True, index=0)
+        chest_pain = st.radio("Nyeri Dada", ["Tidak", "Ya"], horizontal=True, index=0)
+        wheezing = st.radio("Mengi", ["Tidak", "Ya"], horizontal=True, index=0)
 
     st.markdown("---")
     
-    predict_button = st.button("CHECK RISK NOW", use_container_width=True)
+    predict_button = st.button("CEK RISIKO SEKARANG", use_container_width=True)
 
 
 # ============================================
-# LAYOUT: MAIN PAGE (PREDICTION RESULTS)
+# LAYOUT: MAIN PAGE (HASIL PREDIKSI)
 # ============================================
 
-# 1. CENTERED TITLE
+# 1. JUDUL RATA TENGAH
 st.markdown("""
 <div style="text-align: center; margin-bottom: 2rem;">
     <h1 style="font-size:2.2rem; font-weight:800; color:#1e293b; margin-bottom:0.5rem;">
-        Lung Cancer Risk Prediction
+        Prediksi Risiko Kanker Paru
     </h1>
     <p style="color:#64748b; font-size:1rem; margin:0 auto; max-width: 600px;">
-        Enter your health conditions in the form on the left sidebar, then click <br>
-        <b style="color:#1565c0;">CHECK RISK NOW</b> to see the results.
+        Masukkan kondisi tubuh Anda pada formulir di sebelah kiri, kemudian klik 
+        <b style="color:#1565c0;">CEK RISIKO SEKARANG</b> untuk mengetahui hasilnya.
     </p>
 </div>
 """, unsafe_allow_html=True)
 
 
 if predict_button:
-    # Mapping English UI inputs to Model Numerical Values (1=No, 2=Yes; Male=1, Female=0)
     input_data = {
-        'GENDER': 1 if gender == "Male" else 0,
+        'GENDER': 1 if gender == "Laki-laki" else 0,
         'AGE': age,
-        'SMOKING': 2 if smoking == "Yes" else 1,
-        'YELLOW_FINGERS': 2 if yellow_fingers == "Yes" else 1,
-        'ANXIETY': 2 if anxiety == "Yes" else 1,
-        'PEER_PRESSURE': 2 if peer_pressure == "Yes" else 1,
-        'CHRONIC_DISEASE': 2 if chronic_disease == "Yes" else 1,
-        'FATIGUE': 2 if fatigue == "Yes" else 1,
-        'ALLERGY': 2 if allergy == "Yes" else 1,
-        'WHEEZING': 2 if wheezing == "Yes" else 1,
-        'ALCOHOL_CONSUMING': 2 if alcohol == "Yes" else 1,
-        'COUGHING': 2 if coughing == "Yes" else 1,
-        'SHORTNESS_OF_BREATH': 2 if shortness == "Yes" else 1,
-        'SWALLOWING_DIFFICULTY': 2 if swallowing == "Yes" else 1,
-        'CHEST_PAIN': 2 if chest_pain == "Yes" else 1,
+        'SMOKING': 2 if smoking == "Ya" else 1,
+        'YELLOW_FINGERS': 2 if yellow_fingers == "Ya" else 1,
+        'ANXIETY': 2 if anxiety == "Ya" else 1,
+        'PEER_PRESSURE': 2 if peer_pressure == "Ya" else 1,
+        'CHRONIC_DISEASE': 2 if chronic_disease == "Ya" else 1,
+        'FATIGUE': 2 if fatigue == "Ya" else 1,
+        'ALLERGY': 2 if allergy == "Ya" else 1,
+        'WHEEZING': 2 if wheezing == "Ya" else 1,
+        'ALCOHOL_CONSUMING': 2 if alcohol == "Ya" else 1,
+        'COUGHING': 2 if coughing == "Ya" else 1,
+        'SHORTNESS_OF_BREATH': 2 if shortness == "Ya" else 1,
+        'SWALLOWING_DIFFICULTY': 2 if swallowing == "Ya" else 1,
+        'CHEST_PAIN': 2 if chest_pain == "Ya" else 1,
     }
 
     prediction, probability = model.predict(input_data)
@@ -251,37 +449,37 @@ if predict_button:
     risk_pct = prob_yes * 100
 
     if prediction == 1:
-        risk_status = "POSITIVE LUNG CANCER RISK"
+        risk_status = "POSITIF RISIKO KANKER PARU"
         risk_emoji = "⚠️"
         risk_class = "result-positive"
         risk_color = "#d32f2f"
-        advice = "Please consult a pulmonologist immediately for further examination such as an X-ray or CT Scan, and improve your healthy lifestyle."
+        advice = "Segera konsultasikan kondisi Anda ke dokter spesialis paru untuk pemeriksaan lanjutan seperti Rontgen atau CT Scan dan tingkatkan pola hidup sehat."
     else:
-        risk_status = "NEGATIVE / LOW RISK"
+        risk_status = "NEGATIF / RENDAH RISIKO"
         risk_emoji = "✅"
         risk_class = "result-negative"
         risk_color = "#2e7d32"
-        advice = "Your condition is detected as low risk. Keep maintaining a healthy lifestyle, avoid smoking, and do regular health check-ups."
+        advice = "Kondisi Anda terdeteksi rendah risiko. Tetap jaga pola hidup sehat, hindari asap rokok, dan lakukan pemeriksaan kesehatan rutin."
 
     # ============================================
-    # CARD 1: PREDICTION RESULT (Centered)
+    # CARD 1: HASIL PREDIKSI (Rata Tengah)
     # ============================================
     st.markdown(f"""
     <div class="result-card {risk_class}">
         <div style="font-size:4rem;">{risk_emoji}</div>
         <h2 style="color:{risk_color}; margin:15px 0; font-size:1.8rem;">{risk_status}</h2>
         <p style="font-size:1.1rem; color:#64748b; margin:0;">
-            Probability Level: <b style="color:{risk_color}; font-size:2rem;">{risk_pct:.1f}%</b>
+            Tingkat Probabilitas: <b style="color:{risk_color}; font-size:2rem;">{risk_pct:.1f}%</b>
         </p>
     </div>
     """, unsafe_allow_html=True)
 
     # ============================================
-    # CARD 2: PROBABILITY SCORE / GAUGE (Centered)
+    # CARD 2: SKOR RASIO / GAUGE (Rata Tengah)
     # ============================================
     st.markdown("""
     <div class="gauge-card">
-        <h3 style="color:#1e293b; margin-top:0; margin-bottom:10px;">📊 Probability Score</h3>
+        <h3 style="color:#1e293b; margin-top:0; margin-bottom:10px;">📊 Skor Probabilitas</h3>
     """, unsafe_allow_html=True)
 
     fig_gauge = go.Figure(go.Indicator(
@@ -310,11 +508,11 @@ if predict_button:
     st.markdown("</div>", unsafe_allow_html=True)    
 
     # ============================================
-    # CARD 3: MEDICAL RECOMMENDATION (Using factor-card)
+    # CARD 3: REKOMENDASI MEDIS (Pakai factor-card)
     # ============================================
     st.markdown(f"""
     <div class="factor-card" style="border-left-color: #1565c0;">
-        <h4 style="margin-top:0; margin-bottom:10px; color:#1e293b;">💡 Medical Recommendation</h4>
+        <h4 style="margin-top:0; margin-bottom:10px; color:#1e293b;">💡 Rekomendasi Medis</h4>
         <p style="color:#475569; font-size:1rem; line-height:1.6; margin:0;">
             {advice}
         </p>
@@ -322,57 +520,57 @@ if predict_button:
     """, unsafe_allow_html=True)
 
     # ============================================
-    # CARD 4: INFLUENCING FACTORS (Using factor-card + nested cards)
+    # CARD 4: FAKTOR YANG MEMPENGARUHI (Pakai factor-card + nested cards)
     # ============================================
     
     factors_detected = []
-    if smoking == "Yes": factors_detected.append(("🚬 Smoking", "#d32f2f"))
-    if alcohol == "Yes": factors_detected.append(("🍺 Alcohol Consuming", "#d32f2f"))
-    if chronic_disease == "Yes": factors_detected.append(("🏥 Chronic Disease", "#f59e0b"))
-    if coughing == "Yes": factors_detected.append(("😷 Chronic Coughing", "#f59e0b"))
-    if shortness == "Yes": factors_detected.append(("😮‍💨 Shortness of Breath", "#f59e0b"))
-    if wheezing == "Yes": factors_detected.append(("💨 Wheezing", "#f59e0b"))
-    if chest_pain == "Yes": factors_detected.append(("💔 Chest Pain", "#f59e0b"))
-    if yellow_fingers == "Yes": factors_detected.append(("🤚 Yellow Fingers", "#64748b"))
-    if fatigue == "Yes": factors_detected.append(("😴 Fatigue", "#64748b"))
-    if swallowing == "Yes": factors_detected.append(("🥴 Swallowing Difficulty", "#64748b"))
-    if anxiety == "Yes": factors_detected.append(("😰 Anxiety", "#64748b"))
-    if allergy == "Yes": factors_detected.append(("🤧 Allergy", "#64748b"))
-    if age > 60: factors_detected.append((f"👤 Age {age} years", "#64748b"))
+    if smoking == "Ya": factors_detected.append(("🚬 Merokok", "#d32f2f"))
+    if alcohol == "Ya": factors_detected.append(("🍺 Konsumsi Alkohol", "#d32f2f"))
+    if chronic_disease == "Ya": factors_detected.append(("🏥 Penyakit Kronis", "#f59e0b"))
+    if coughing == "Ya": factors_detected.append(("😷 Batuk Berkepanjangan", "#f59e0b"))
+    if shortness == "Ya": factors_detected.append(("😮‍💨 Sesak Napas", "#f59e0b"))
+    if wheezing == "Ya": factors_detected.append(("💨 Mengi", "#f59e0b"))
+    if chest_pain == "Ya": factors_detected.append(("💔 Nyeri Dada", "#f59e0b"))
+    if yellow_fingers == "Ya": factors_detected.append(("🤚 Jari Kuning", "#64748b"))
+    if fatigue == "Ya": factors_detected.append(("😴 Kelelahan", "#64748b"))
+    if swallowing == "Ya": factors_detected.append(("🥴 Sulit Menelan", "#64748b"))
+    if anxiety == "Ya": factors_detected.append(("😰 Kecemasan", "#64748b"))
+    if allergy == "Ya": factors_detected.append(("🤧 Alergi", "#64748b"))
+    if age > 60: factors_detected.append((f"👤 Usia {age} tahun", "#64748b"))
 
-    # Outer card - Written in 1 line to avoid code block rendering
-    factors_html = '<div class="factor-card" style="border-left-color: #1565c0;"><h4 style="margin-top:0; margin-bottom:15px; color:#1e293b;">📋 Factors Influencing Your Prediction</h4><div style="display: flex; flex-wrap: wrap; gap: 10px;">'
+    # Kotak induk (outer card) - Ditulis 1 baris agar tidak terdeteksi code block
+    factors_html = '<div class="factor-card" style="border-left-color: #1565c0;"><h4 style="margin-top:0; margin-bottom:15px; color:#1e293b;">📋 Faktor yang Mempengaruhi Prediksi Anda</h4><div style="display: flex; flex-wrap: wrap; gap: 10px;">'
 
     if factors_detected:
-        # Inner cards - Written in 1 line
+        # Kotak anak (inner card) - Ditulis 1 baris agar tidak terdeteksi code block
         for factor, color in factors_detected:
             factors_html += f'<div class="factor-card" style="border-left-color: {color}; margin-bottom: 0; padding: 8px 15px; font-size: 0.9rem; box-shadow: none; border: 1px solid #e2e8f0; border-left: 3px solid {color};">{factor}</div>'
     else:
-        factors_html += '<div style="color: #64748b; font-size: 0.95rem;">No major risk factors detected in your input.</div>'
+        factors_html += '<div style="color: #64748b; font-size: 0.95rem;">Tidak ada faktor risiko utama yang terdeteksi pada input Anda.</div>'
     
     factors_html += '</div></div>'
     st.markdown(factors_html, unsafe_allow_html=True)
 
     # ============================================
-    # CARD 5: DISCLAIMER (Using factor-card yellow/orange)
+    # CARD 5: DISCLAIMER (Pakai factor-card warna kuning/oranye)
     # ============================================
     st.markdown("""
     <div class="factor-card" style="border-left-color: #f59e0b; margin-top: 10px;">
-        <small style="color: #475569;">⚠️ <b>Disclaimer:</b> This application uses a Decision Tree algorithm to predict patterns based on data. The prediction results are <b>not an official medical diagnosis</b>. Always consult your health condition with a professional doctor.</small>
+        <small style="color: #475569;">⚠️ <b>Disclaimer:</b> Aplikasi ini menggunakan algoritma Decision Tree untuk memprediksi pola berdasarkan data. Hasil prediksi <b>bukan merupakan diagnosis medis resmi</b>. Selalu konsultasikan kondisi kesehatan Anda dengan dokter profesional.</small>
     </div>
     """, unsafe_allow_html=True)
 
 else:
-    # Initial display before button is clicked
+    # Tampilan awal sebelum tombol diklik
     st.markdown("""
     <div style="text-align: center; padding: 20px; color: #64748b;">
         <div style="font-size: 5rem; margin-top: 3rem; margin-bottom: 3rem;">🩺</div>
         <h1 style="font-size:2.2rem; font-weight:800; color:#1e293b; margin-bottom:0.5rem;">
-            Ready to Check Your Lung Health?
+            Siap Untuk Mengecek Kesehatan Paru Anda?
         </h1>
         <p style="color:#64748b; font-size:1rem; margin:0 auto; max-width: 600px;">
-            Fill out the form in the left sidebar, then press the 
-            <b style="color:#1565c0;">CHECK RISK NOW</b> button.
+            Isi formulir di sidebar sebelah kiri, lalu tekan tombol 
+            <b style="color:#1565c0;">CEK RISIKO SEKARANG</b>
         </p>
     </div>
     """, unsafe_allow_html=True)
